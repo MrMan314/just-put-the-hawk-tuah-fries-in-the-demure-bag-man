@@ -4,6 +4,9 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <sys/ioctl.h>
+
+#define BUF_SIZE 1024
 
 char *ip = "127.0.0.1";
 int port = 65000;
@@ -14,6 +17,32 @@ void* client_thread(void *vargp) {
 	int *client_sock_ptr;
 	client_sock_ptr = (int *) vargp;
 	int client_sock = *client_sock_ptr;
+
+	int len = 0;
+
+	FILE *fptr;
+	fptr = fopen("test.txt", "a");
+
+	ioctl(client_sock, FIONREAD, &len);
+	printf("to read: %d\n", len);
+
+	do {
+		char buf[BUF_SIZE];
+		bzero(buf, sizeof(buf));
+		int bytes_read = recv(client_sock, buf, sizeof(buf), 0);
+
+		fwrite(buf, bytes_read, 1, fptr);
+
+		printf("bytes read: %d\n", bytes_read);
+
+		ioctl(client_sock, FIONREAD, &len);
+		printf("remaining: %d\n", len);
+	} while (len > 0);
+
+	fclose(fptr);
+	close(client_sock);
+
+/*
 	char buf[1024];
 	bzero(buf, 1024);
 	recv(client_sock, buf, sizeof(buf), 0);
@@ -32,6 +61,7 @@ void* client_thread(void *vargp) {
 	fclose(fptr);
 
 	close(client_sock);
+*/
 }
 
 int main() {
