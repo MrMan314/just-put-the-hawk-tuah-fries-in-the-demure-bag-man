@@ -19,6 +19,7 @@ void* client_thread(void *vargp) {
 	int client_sock = *client_sock_ptr;
 
 	int len = 0;
+	char method[BUF_SIZE], host[BUF_SIZE], buf[BUF_SIZE];
 
 	FILE *fptr;
 	fptr = fopen("test.txt", "a");
@@ -26,42 +27,36 @@ void* client_thread(void *vargp) {
 	ioctl(client_sock, FIONREAD, &len);
 	printf("to read: %d\n", len);
 
-	do {
-		char buf[BUF_SIZE];
+	bzero(buf, sizeof(buf));
+	int bytes_read = recv(client_sock, buf, sizeof(buf), 0);
+
+	if (bytes_read < 0) {
+		goto kys;
+	}
+
+	sscanf(buf, "%s %s", method, host);
+	printf("im totally connecting to: %s\n", host);
+	if (strcasecmp(method, "CONNECT")) {
 		bzero(buf, sizeof(buf));
-		int bytes_read = recv(client_sock, buf, sizeof(buf), 0);
+		strcpy(buf, "HTTP/1.1 405 METHOD NOT ALLOWED\r\n\r\nwomp womp\r\n");
+		int sent = send(client_sock, buf, strlen(buf), 0);
+		goto kys;
+	}
 
-		fwrite(buf, bytes_read, 1, fptr);
+	fwrite(buf, bytes_read, 1, fptr);
 
-		printf("bytes read: %d\n", bytes_read);
+	printf("bytes read: %d\n", bytes_read);
 
-		ioctl(client_sock, FIONREAD, &len);
-		printf("remaining: %d\n", len);
-	} while (len > 0);
-
-	fclose(fptr);
-	close(client_sock);
-
-/*
-	char buf[1024];
-	bzero(buf, 1024);
-	recv(client_sock, buf, sizeof(buf), 0);
-	printf("%s\n", buf);
-
-	bzero(buf, 1024);
+	ioctl(client_sock, FIONREAD, &len);
+	printf("remaining: %d\n", len);
+	
+	bzero(buf, sizeof(buf));
 	strcpy(buf, "HTTP/1.1 200 OK\r\n\r\n");
-	send(client_sock, buf, strlen(buf), 0);
+	int sent = send(client_sock, buf, strlen(buf), 0);
 
-	bzero(buf, 1024);
-	recv(client_sock, buf, sizeof(buf), 0);
-
-	FILE *fptr;
-	fptr = fopen("test", "w");
-	fwrite(buf, sizeof(buf), 1, fptr);
-	fclose(fptr);
-
-	close(client_sock);
-*/
+	kys:
+		fclose(fptr);
+		close(client_sock);
 }
 
 int main() {
