@@ -9,7 +9,7 @@
 #define BUF_SIZE 1024
 
 void* client_thread(void *vargp);
-void tcp_connect(int *server_sock_ptr, int *client_sock_ptr);
+void tcp_connect(int *host_sock_ptr, int *client_sock_ptr);
 
 char *ip = "127.0.0.1";
 int port = 65000;
@@ -67,27 +67,27 @@ void* client_thread(void *vargp) {
 		goto kys;
 	}
 
-	struct sockaddr_in serv_addr;
-	int serv_sock;
+	struct sockaddr_in host_addr;
+	int host_sock;
 
-	serv_sock = socket(AF_INET, SOCK_STREAM, 0);
-	if (serv_sock < 0) {
+	host_sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (host_sock < 0) {
 		fprintf(stderr, "Error initializing server socket.\r\n");
 		goto kys;
 	}
 
-	bzero(&serv_addr, sizeof(serv_addr));
+	bzero(&host_addr, sizeof(host_addr));
 
-	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_addr.s_addr = inet_addr(hostname);
-	serv_addr.sin_port = htons(host_port);
+	host_addr.sin_family = AF_INET;
+	host_addr.sin_addr.s_addr = inet_addr(hostname);
+	host_addr.sin_port = htons(host_port);
 
-	if (connect(serv_sock, (struct sockaddr*) &serv_addr, sizeof(serv_addr)) < 0) {
+	if (connect(host_sock, (struct sockaddr*) &host_addr, sizeof(host_addr)) < 0) {
 		fprintf(stderr, "error connecting");
 		goto kys;
 	}
 
-	tcp_connect(&serv_sock, client_sock_ptr);
+	tcp_connect(&host_sock, client_sock_ptr);
 /*
 	fwrite(buf, bytes_read, 1, fptr);
 
@@ -105,14 +105,14 @@ void* client_thread(void *vargp) {
 		free(hostname);
 		hostname = NULL;
 		fclose(fptr);
-		close(serv_sock);
+		close(host_sock);
 		close(client_sock);
 		pthread_exit(NULL);
 		puts("im killing myself 2\n");
 }
 
-void tcp_connect(int *server_sock_ptr, int *client_sock_ptr) {
-	int serv_sock = *server_sock_ptr, client_sock = *client_sock_ptr;
+void tcp_connect(int *host_sock_ptr, int *client_sock_ptr) {
+	int host_sock = *host_sock_ptr, client_sock = *client_sock_ptr;
 	printf("in my connecting era\n");
 	return;
 }
