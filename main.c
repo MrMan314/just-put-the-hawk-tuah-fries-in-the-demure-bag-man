@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <sys/ioctl.h>
+#include <netdb.h>
 
 #define BUF_SIZE 1024
 
@@ -23,9 +24,6 @@ void* client_thread(void *vargp) {
 
 	int len = 0;
 	char method[BUF_SIZE], host[BUF_SIZE], buf[BUF_SIZE];
-
-	FILE *fptr;
-	fptr = fopen("test.txt", "a");
 
 	ioctl(client_sock, FIONREAD, &len);
 //	printf("to read: %d\n", len);
@@ -76,18 +74,51 @@ void* client_thread(void *vargp) {
 		goto kys;
 	}
 
-	bzero(&host_addr, sizeof(host_addr));
+	struct addrinfo hints, *res, *result;
 
-	host_addr.sin_family = AF_INET;
-	host_addr.sin_addr.s_addr = inet_addr(hostname);
-	host_addr.sin_port = htons(host_port);
+	bzero(&hints, sizeof(hints));
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_PASSIVE;
 
-	if (connect(host_sock, (struct sockaddr*) &host_addr, sizeof(host_addr)) < 0) {
-		fprintf(stderr, "error connecting");
+	int errno = getaddrinfo(hostname, NULL, &hints, &result);
+	if (errno < 0) {
+		fprintf(stderr, "error in getaddrinfo(): %d: %s\n%s:%d\n", errno, strerror(errno), hostname, host_port);
 		goto kys;
 	}
 
-	tcp_connect(&host_sock, client_sock_ptr);
+	res = result;
+
+	char addrstr[BUF_SIZE];
+	void *ptr;
+
+	next_addr:
+		if (res) {
+			inet_ntop(res->ai_family, res->ai_addr->sa_data, addrstr, BUF_SIZE);
+			ptr = &((struct sockaddr_in *) res->ai_addr)->sin_addr;
+			inet_ntop(res->ai_family, ptr, addrstr, BUF_SIZE);
+			printf("%s: %s\n", hostname, addrstr);
+		} else {
+			goto kys;
+		}
+
+	connect:
+		bzero(&host_addr, sizeof(host_addr));
+
+		host_addr.sin_family = AF_INET;
+		host_addr.sin_addr.s_addr = res->ai_family;
+		host_addr.sin_port = htons(host_port);
+		errno = connect(host_sock, (struct sockaddr*) &host_addr, sizeof(host_addr));
+		puts("im pooping rn\n");
+		if (errno < 0) {
+			fprintf(stderr, "error connecting: %d: %s\n%s:%d\n", errno, strerror(errno), hostname, host_port);
+			res = res ->ai_next;
+			goto next_addr;
+		}
+
+		tcp_connect(&host_sock, client_sock_ptr);
+		goto kys;
+
 /*
 	fwrite(buf, bytes_read, 1, fptr);
 
@@ -102,9 +133,11 @@ void* client_thread(void *vargp) {
 */
 	kys:
 		puts("im killing myself\n");
+		freeaddrinfo(result);
+		res = NULL;
+		result = NULL;
 		free(hostname);
 		hostname = NULL;
-		fclose(fptr);
 		close(host_sock);
 		close(client_sock);
 		pthread_exit(NULL);
@@ -152,7 +185,7 @@ int main() {
 			printf("%s\n", strerror(client_socket));
 			continue;
 		}
-		puts("new spawn\n");
+		puts("new spawn");
 		pthread_t thread;
 		pthread_create(&thread, NULL, client_thread, (void*) &client_socket);
 	}
