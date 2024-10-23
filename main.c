@@ -9,8 +9,9 @@
 
 #define BUF_SIZE 1024
 
-void* client_thread(void *vargp);
-void tcp_connect(int *host_sock_ptr, int *client_sock_ptr);
+void *client_thread(void *vargp);
+void *client_tx_thread(void *vargp);
+void tcp_connect(int *host_sock_ptr, int *client_sock_ptr, pthread_t *thread);
 
 char *ip = "127.0.0.1";
 int port = 65000;
@@ -18,9 +19,7 @@ int server_sock, result;
 struct sockaddr_in server_addr, client_addr;
 
 void* client_thread(void *vargp) {
-	int *client_sock_ptr;
-	client_sock_ptr = (int *) vargp;
-	int client_sock = *client_sock_ptr;
+	int client_sock = *((int *) vargp);
 
 	int len = 0;
 	char method[BUF_SIZE], host[BUF_SIZE], buf[BUF_SIZE];
@@ -65,15 +64,6 @@ void* client_thread(void *vargp) {
 		goto kys;
 	}
 
-	struct sockaddr_in host_addr;
-	int host_sock;
-
-	host_sock = socket(AF_INET, SOCK_STREAM, 0);
-	if (host_sock < 0) {
-		fprintf(stderr, "Error initializing server socket.\r\n");
-		goto kys;
-	}
-
 	struct addrinfo hints, *res, *result;
 
 	bzero(&hints, sizeof(hints));
@@ -91,33 +81,39 @@ void* client_thread(void *vargp) {
 
 	char addrstr[BUF_SIZE];
 	void *ptr;
+	pthread_t thread;
+	struct sockaddr_in host_addr;
+	int host_sock;
 
-	next_addr:
-		if (res) {
-			inet_ntop(res->ai_family, res->ai_addr->sa_data, addrstr, BUF_SIZE);
-			ptr = &((struct sockaddr_in *) res->ai_addr)->sin_addr;
-			inet_ntop(res->ai_family, ptr, addrstr, BUF_SIZE);
-			printf("%s: %s\n", hostname, addrstr);
-		} else {
-			goto kys;
-		}
 
-	connect:
+	while (res) {
+		inet_ntop(res->ai_family, res->ai_addr->sa_data, addrstr, BUF_SIZE);
+		ptr = &((struct sockaddr_in *) res->ai_addr)->sin_addr;
+		inet_ntop(res->ai_family, ptr, addrstr, BUF_SIZE);
+		printf("%s: %s\n", hostname, addrstr);
+
 		bzero(&host_addr, sizeof(host_addr));
 
 		host_addr.sin_family = AF_INET;
-		host_addr.sin_addr.s_addr = res->ai_family;
+		host_addr.sin_addr.s_addr = ((struct sockaddr_in *) res->ai_addr)->sin_addr.s_addr;
 		host_addr.sin_port = htons(host_port);
+
+		host_sock = socket(AF_INET, SOCK_STREAM, 0);
+		if (host_sock < 0) {
+			fprintf(stderr, "Error initializing server socket.\r\n");
+			break;
+		}
+
 		errno = connect(host_sock, (struct sockaddr*) &host_addr, sizeof(host_addr));
-		puts("im pooping rn\n");
 		if (errno < 0) {
 			fprintf(stderr, "error connecting: %d: %s\n%s:%d\n", errno, strerror(errno), hostname, host_port);
 			res = res ->ai_next;
-			goto next_addr;
+			continue;
 		}
 
-		tcp_connect(&host_sock, client_sock_ptr);
-		goto kys;
+		tcp_connect(&host_sock, (int *) vargp, &thread);
+		break;
+	}
 
 /*
 	fwrite(buf, bytes_read, 1, fptr);
@@ -131,6 +127,7 @@ void* client_thread(void *vargp) {
 	strcpy(buf, "HTTP/1.1 200 OK\r\n\r\n");
 	int sent = send(client_sock, buf, strlen(buf), 0);
 */
+	pthread_cancel(thread);
 	kys:
 		puts("im killing myself\n");
 		freeaddrinfo(result);
@@ -144,10 +141,21 @@ void* client_thread(void *vargp) {
 		puts("im killing myself 2\n");
 }
 
-void tcp_connect(int *host_sock_ptr, int *client_sock_ptr) {
+void tcp_connect(int *host_sock_ptr, int *client_sock_ptr, pthread_t *thread) {
+	pthread_create(thread, NULL, client_tx_thread, (void*) client_sock_ptr);
 	int host_sock = *host_sock_ptr, client_sock = *client_sock_ptr;
 	printf("in my connecting era\n");
 	return;
+}
+
+void *client_tx_thread(void *client_sock_ptr) {
+	printf("in my connecting era 1.5\n");
+	int client_sock = *((int *) client_sock_ptr);
+	char buf[BUF_SIZE];
+	bzero(buf, sizeof(buf));
+	strcpy(buf, "HTTP/1.1 200 OK\r\n\r\n");
+	int sent = send(client_sock, buf, strlen(buf), 0);
+	printf("in my connecting era 2\n");
 }
 
 int main() {
