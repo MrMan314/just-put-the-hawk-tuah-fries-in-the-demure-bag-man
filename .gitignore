@@ -1,4 +1,4 @@
 *.o
-main
+*.exe
+*.out
 proxy
-test

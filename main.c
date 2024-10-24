@@ -1,11 +1,21 @@
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+// #include <stdint.h>
+#include <string.h>
 #include <unistd.h>
-#include <arpa/inet.h>
 #include <pthread.h>
-#include <sys/ioctl.h>
-#include <netdb.h>
+#ifdef _WIN32
+	#include <winsock2.h>
+//	#include <windows.h>
+	#include <ws2tcpip.h>
+	#define bzero(buf, len) memset(buf, 0, len)
+	#define ioctl(s, cmd, argp) ioctlsocket(s, cmd, argp)
+	#define close(s) closesocket(s)
+#else
+	#include <netdb.h>
+	#include <arpa/inet.h>
+	#include <sys/ioctl.h>
+#endif
 
 #define BUF_SIZE 1024
 
@@ -21,17 +31,17 @@ struct sockaddr_in server_addr, client_addr;
 void* client_thread(void *vargp) {
 	int client_sock = *((int *) vargp);
 
-	int len = 0;
+	long unsigned int len = 0;
 	char method[BUF_SIZE], host[BUF_SIZE], buf[BUF_SIZE];
 
 	ioctl(client_sock, FIONREAD, &len);
-//	printf("to read: %d\n", len);
+	printf("to read: %lu\r\n", len);
 
 	bzero(buf, sizeof(buf));
 	int bytes_read = recv(client_sock, buf, sizeof(buf), 0);
 
 	if (bytes_read < 0) {
-		fprintf(stderr, "error reading bytes");
+		fprintf(stderr, "error reading bytes\r\n");
 		goto kys;
 	}
 
@@ -40,27 +50,27 @@ void* client_thread(void *vargp) {
 		bzero(buf, sizeof(buf));
 		strcpy(buf, "HTTP/1.1 405 METHOD NOT ALLOWED\r\n\r\n<h1>Error 405: Method not allowed.</h1>\r\n<p>This proxy only supports CONNECT requests.</p>\r\n");
 		int sent = send(client_sock, buf, strlen(buf), 0);
-		fprintf(stderr, "invalid request");
+		fprintf(stderr, "invalid request\r\n");
 		goto kys;
 	}
 
-	printf("im totally connecting to: %s\n", host);
+	printf("im totally connecting to: %s\r\n", host);
 
 	char *host_token = strtok(host, ":");
 	if (host_token == NULL) {
-		fprintf(stderr, "error reading host");
+		fprintf(stderr, "error reading host\r\n");
 		goto kys;
 	}
 	char *hostname = malloc(strlen(host_token)), *end_ptr;
 	strcpy(hostname, host_token);
 	host_token = strtok(NULL, ":");
 	if (host_token == NULL) {
-		fprintf(stderr, "error reading port");
+		fprintf(stderr, "error reading port\r\n");
 		goto kys;
 	}
 	int host_port = strtol(host_token, &end_ptr, 10);
 	if (end_ptr == host_token || *end_ptr || host_port < 0 || host_port > 65535) {
-		fprintf(stderr, "error parsing port");
+		fprintf(stderr, "error parsing port\r\n");
 		goto kys;
 	}
 
@@ -71,9 +81,9 @@ void* client_thread(void *vargp) {
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = AI_PASSIVE;
 
-	int errno = getaddrinfo(hostname, NULL, &hints, &result);
-	if (errno < 0) {
-		fprintf(stderr, "error in getaddrinfo(): %d: %s\n%s:%d\n", errno, strerror(errno), hostname, host_port);
+	int err_code = getaddrinfo(hostname, NULL, &hints, &result);
+	if (err_code < 0) {
+		fprintf(stderr, "error in getaddrinfo(): %d: %s\r\n", err_code, strerror(err_code));
 		goto kys;
 	}
 
@@ -104,12 +114,13 @@ void* client_thread(void *vargp) {
 			break;
 		}
 
-		errno = connect(host_sock, (struct sockaddr*) &host_addr, sizeof(host_addr));
-		if (errno < 0) {
-			fprintf(stderr, "error connecting: %d: %s\n%s:%d\n", errno, strerror(errno), hostname, host_port);
+		err_code = connect(host_sock, (struct sockaddr*) &host_addr, sizeof(host_addr));
+		if (err_code < 0) {
+			fprintf(stderr, "error connecting: %d: %s\r\n", err_code, strerror(err_code));
 			res = res ->ai_next;
 			continue;
 		}
+		printf("connected!!🪤\r\n");
 
 		tcp_connect(&host_sock, (int *) vargp, &thread);
 		break;
@@ -129,7 +140,7 @@ void* client_thread(void *vargp) {
 */
 	pthread_cancel(thread);
 	kys:
-		puts("im killing myself\n");
+		printf("im killing myself\r\n");
 		freeaddrinfo(result);
 		res = NULL;
 		result = NULL;
@@ -138,37 +149,45 @@ void* client_thread(void *vargp) {
 		close(host_sock);
 		close(client_sock);
 		pthread_exit(NULL);
-		puts("im killing myself 2\n");
+		printf("im killing myself 2\r\n");
 }
 
 void tcp_connect(int *host_sock_ptr, int *client_sock_ptr, pthread_t *thread) {
 	pthread_create(thread, NULL, client_tx_thread, (void*) client_sock_ptr);
 	int host_sock = *host_sock_ptr, client_sock = *client_sock_ptr;
-	printf("in my connecting era\n");
+	printf("in my connecting era\r\n");
 	return;
 }
 
 void *client_tx_thread(void *client_sock_ptr) {
-	printf("in my connecting era 1.5\n");
+	printf("in my connecting era 1.5\r\n");
 	int client_sock = *((int *) client_sock_ptr);
 	char buf[BUF_SIZE];
 	bzero(buf, sizeof(buf));
 	strcpy(buf, "HTTP/1.1 200 OK\r\n\r\n");
 	int sent = send(client_sock, buf, strlen(buf), 0);
-	printf("in my connecting era 2\n");
+	printf("in my connecting era 2\r\n");
+	pthread_exit(NULL);
 }
 
 int main() {
+	#ifdef _WIN32
+		WSADATA wsa;
+		result = WSAStartup(MAKEWORD(2, 2), &wsa);
+		if (result < 0) {
+			printf("Error initializing Winsock: %d %s\r\n", result, strerror(result));
+		}
+	#endif
 	server_sock = socket(AF_INET, SOCK_STREAM, 0);
 	if (server_sock < 0) {
-		fprintf(stderr, "Error initializing socket.\r\n");
+		fprintf(stderr, "Error initializing socket: %d %s\r\n", server_sock, strerror(server_sock));
 		return 1;
 	}
 
-	const int enable = 1;
+	const char enable = 1;
 	result = setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int));
 	if (result < 0) {
-		fprintf(stderr, "Error setting SO_REUSEADDR.\r\n");
+		fprintf(stderr, "Error setting SO_REUSEADDR: %d %s\r\n", result, strerror(result));
 		return 1;
 	}
 
@@ -179,7 +198,7 @@ int main() {
 	result = bind(server_sock, (struct sockaddr*) &server_addr, sizeof(server_addr));
 	if (result < 0) {
 		printf("%d\n", port);
-		fprintf(stderr, "Bind error\r\n");
+		fprintf(stderr, "Bind error: %d %s\r\n", result, strerror(result));
 		return 1;
 	}
 
@@ -193,7 +212,7 @@ int main() {
 			printf("%s\n", strerror(client_socket));
 			continue;
 		}
-		puts("new spawn");
+		printf("new spawn\r\n");
 		pthread_t thread;
 		pthread_create(&thread, NULL, client_thread, (void*) &client_socket);
 	}
