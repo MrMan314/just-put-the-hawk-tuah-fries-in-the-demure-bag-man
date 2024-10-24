@@ -2,6 +2,7 @@
 #include <stdlib.h>
 // #include <stdint.h>
 #include <string.h>
+#include <signal.h>
 #include <unistd.h>
 #include <pthread.h>
 #ifdef _WIN32
@@ -138,6 +139,7 @@ void* client_thread(void *vargp) {
 	strcpy(buf, "HTTP/1.1 200 OK\r\n\r\n");
 	int sent = send(client_sock, buf, strlen(buf), 0);
 */
+
 	pthread_cancel(thread);
 	kys:
 		printf("im killing myself\r\n");
@@ -152,22 +154,63 @@ void* client_thread(void *vargp) {
 		printf("im killing myself 2\r\n");
 }
 
+struct socks_t {
+	int *client_sock_ptr;
+	int *host_sock_ptr;
+};
+
 void tcp_connect(int *host_sock_ptr, int *client_sock_ptr, pthread_t *thread) {
-	pthread_create(thread, NULL, client_tx_thread, (void*) client_sock_ptr);
+	struct socks_t sock;
+	long unsigned int len = 0, sent = 0;
+	sock.client_sock_ptr = client_sock_ptr;
+	sock.host_sock_ptr = host_sock_ptr;
+	pthread_create(thread, NULL, client_tx_thread, (void *) &sock);
 	int host_sock = *host_sock_ptr, client_sock = *client_sock_ptr;
 	printf("in my connecting era\r\n");
-	return;
+	while (1) {
+		ioctl(client_sock, FIONREAD, &len);
+		if (len < 0) {
+			printf("(client) exiting due to negative len: %d\r\n", len);
+		} else if (len) {
+			printf("client to read: %lu\r\n", len);
+			char buf[len];
+			recv(client_sock, buf, len, 0);
+			sent = send(host_sock, buf, len, 0);
+			if (sent != len) {
+				printf("(client) sent != len: %d %d\r\n", sent, len);
+				return;
+			}
+		}
+	}
 }
 
-void *client_tx_thread(void *client_sock_ptr) {
+void *client_tx_thread(void *args) {
 	printf("in my connecting era 1.5\r\n");
-	int client_sock = *((int *) client_sock_ptr);
-	char buf[BUF_SIZE];
-	bzero(buf, sizeof(buf));
-	strcpy(buf, "HTTP/1.1 200 OK\r\n\r\n");
-	int sent = send(client_sock, buf, strlen(buf), 0);
+	struct socks_t *sock = args;
+
+	int host_sock = *(sock->host_sock_ptr), client_sock = *(sock->client_sock_ptr);
+
+	long unsigned int len = 0, sent = 0;
+	char msgbuf[BUF_SIZE];
+	bzero(msgbuf, sizeof(msgbuf));
+	strcpy(msgbuf, "HTTP/1.1 200 OK\r\n\r\n");
+	sent = send(client_sock, msgbuf, strlen(msgbuf), 0);
 	printf("in my connecting era 2\r\n");
-	pthread_exit(NULL);
+	while (1) {
+		ioctl(host_sock, FIONREAD, &len);
+		if (len < 0) {
+			printf("(host) exiting due to negative len: %d\r\n", len);
+		} else if (len) {
+			printf("host to read: %lu\r\n", len);
+			char buf[len];
+			recv(host_sock, buf, len, 0);
+			sent = send(client_sock, buf, len, 0);
+			if (sent != len) {
+				printf("(host) sent != len: %d %d\r\n", sent, len);
+				pthread_exit(NULL);
+			}
+		}
+	}
 }
 
 int main() {
@@ -178,6 +221,7 @@ int main() {
 			printf("Error initializing Winsock: %d %s\r\n", result, strerror(result));
 		}
 	#endif
+	signal(SIGPIPE, SIG_IGN);
 	server_sock = socket(AF_INET, SOCK_STREAM, 0);
 	if (server_sock < 0) {
 		fprintf(stderr, "Error initializing socket: %d %s\r\n", server_sock, strerror(server_sock));
