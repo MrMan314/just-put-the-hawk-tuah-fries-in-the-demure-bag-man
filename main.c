@@ -35,23 +35,20 @@ void* client_thread(void *vargp) {
 	long unsigned int len = 0;
 	char method[BUF_SIZE], host[BUF_SIZE], buf[BUF_SIZE];
 
-	ioctl(client_sock, FIONREAD, &len);
-	printf("to read: %lu\r\n", len);
-
 	bzero(buf, sizeof(buf));
 	int bytes_read = recv(client_sock, buf, sizeof(buf), 0);
 
-	if (bytes_read < 0) {
-		fprintf(stderr, "error reading bytes\r\n");
+	if (bytes_read <= 0) {
+		fprintf(stderr, "error reading bytes: %d %s\r\n", bytes_read, strerror(bytes_read));
 		goto kys;
 	}
 
 	sscanf(buf, "%s %s", method, host);
 	if (strcasecmp(method, "CONNECT")) {
+		fprintf(stderr, "invalid request: %d %s\r\n", bytes_read, buf);
 		bzero(buf, sizeof(buf));
 		strcpy(buf, "HTTP/1.1 405 METHOD NOT ALLOWED\r\n\r\n<h1>Error 405: Method not allowed.</h1>\r\n<p>This proxy only supports CONNECT requests.</p>\r\n");
 		int sent = send(client_sock, buf, strlen(buf), 0);
-		fprintf(stderr, "invalid request\r\n");
 		goto kys;
 	}
 
@@ -62,8 +59,7 @@ void* client_thread(void *vargp) {
 		fprintf(stderr, "error reading host\r\n");
 		goto kys;
 	}
-	char *hostname = malloc(strlen(host_token)), *end_ptr;
-	strcpy(hostname, host_token);
+	char *hostname = host_token, *end_ptr;
 	host_token = strtok(NULL, ":");
 	if (host_token == NULL) {
 		fprintf(stderr, "error reading port\r\n");
@@ -146,7 +142,7 @@ void* client_thread(void *vargp) {
 		freeaddrinfo(result);
 		res = NULL;
 		result = NULL;
-		free(hostname);
+//		free(hostname);
 		hostname = NULL;
 		close(host_sock);
 		close(client_sock);
@@ -162,24 +158,22 @@ struct socks_t {
 void tcp_connect(int *host_sock_ptr, int *client_sock_ptr, pthread_t *thread) {
 	struct socks_t sock;
 	long unsigned int len = 0, sent = 0;
+	char msgbuf[BUF_SIZE];
 	sock.client_sock_ptr = client_sock_ptr;
 	sock.host_sock_ptr = host_sock_ptr;
 	pthread_create(thread, NULL, client_tx_thread, (void *) &sock);
 	int host_sock = *host_sock_ptr, client_sock = *client_sock_ptr;
 	printf("in my connecting era\r\n");
 	while (1) {
-		ioctl(client_sock, FIONREAD, &len);
-		if (len < 0) {
-			printf("(client) exiting due to negative len: %d\r\n", len);
-		} else if (len) {
-			printf("client to read: %lu\r\n", len);
-			char buf[len];
-			recv(client_sock, buf, len, 0);
-			sent = send(host_sock, buf, len, 0);
-			if (sent != len) {
-				printf("(client) sent != len: %d %d\r\n", sent, len);
+		len = recv(client_sock, msgbuf, BUF_SIZE, 0);
+		if (len && len != -1) {
+			sent = send(host_sock, msgbuf, len, 0);
+			if (len != sent) {
 				return;
 			}
+			printf("(client) sent: %d, received: %d\r\n", sent, len);
+		} else {
+			return;
 		}
 	}
 }
@@ -191,24 +185,21 @@ void *client_tx_thread(void *args) {
 	int host_sock = *(sock->host_sock_ptr), client_sock = *(sock->client_sock_ptr);
 
 	long unsigned int len = 0, sent = 0;
-	char msgbuf[BUF_SIZE];
+	char msgbuf[BUF_SIZE + 1];
 	bzero(msgbuf, sizeof(msgbuf));
 	strcpy(msgbuf, "HTTP/1.1 200 OK\r\n\r\n");
 	sent = send(client_sock, msgbuf, strlen(msgbuf), 0);
 	printf("in my connecting era 2\r\n");
 	while (1) {
-		ioctl(host_sock, FIONREAD, &len);
-		if (len < 0) {
-			printf("(host) exiting due to negative len: %d\r\n", len);
-		} else if (len) {
-			printf("host to read: %lu\r\n", len);
-			char buf[len];
-			recv(host_sock, buf, len, 0);
-			sent = send(client_sock, buf, len, 0);
-			if (sent != len) {
-				printf("(host) sent != len: %d %d\r\n", sent, len);
+		len = recv(host_sock, msgbuf, BUF_SIZE, 0);
+		if (len && len != -1) {
+			sent = send(client_sock, msgbuf, len, 0);
+			if (len != sent) {
 				pthread_exit(NULL);
 			}
+			printf("(host) sent: %d, received: %d\r\n", sent, len);
+		} else {
+			pthread_exit(NULL);
 		}
 	}
 }
