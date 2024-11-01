@@ -106,7 +106,7 @@ void* client_thread(void *vargp) {
 		goto kys;
 	}
 
-	sscanf(buf, "%s %s", method, host);
+	sscanf(buf, "%10s %259s", method, host);
 	if (strcasecmp(method, "CONNECT")) {
 		bzero(buf, sizeof(buf));
 		strcpy(buf, "HTTP/1.1 405 METHOD NOT ALLOWED\r\n\r\n<h1>Error 405: Method not allowed.</h1>\r\n<p>This proxy only supports CONNECT requests.</p>\r\n");
