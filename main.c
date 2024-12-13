@@ -24,9 +24,10 @@
 void *client_thread(void *vargp);
 void *client_tx_thread(void *vargp);
 void *client_rx_thread(void *vargp);
+void *wait_for_client_death(void *vargp);
 
 char *ip = "127.0.0.1";
-int port = 65000;
+int port = 6500;
 int server_sock, result;
 struct sockaddr_in server_addr, client_addr;
 
@@ -35,6 +36,7 @@ struct socks_t {
 	int *host_sock_ptr;
 	pthread_t tx_thread;
 	pthread_t rx_thread;
+	char *hostname;
 };
 
 int main() {
@@ -81,7 +83,7 @@ int main() {
 			printf("%s\n", strerror(client_socket));
 			continue;
 		}
-		printf("new spawn\r\n");
+//		printf("new spawn\r\n");
 		pthread_t thread;
 		pthread_create(&thread, NULL, client_thread, (void*) &client_socket);
 	}
@@ -96,13 +98,13 @@ void* client_thread(void *vargp) {
 	char method[BUF_SIZE], host[BUF_SIZE], buf[BUF_SIZE];
 
 	ioctl(client_sock, FIONREAD, &len);
-	printf("to read: %lu\r\n", len);
+//	printf("to read: %lu\r\n", len);
 
 	bzero(buf, sizeof(buf));
 	int bytes_read = recv(client_sock, buf, sizeof(buf), 0);
 
 	if (bytes_read < 0) {
-		fprintf(stderr, "error reading bytes\r\n");
+		fprintf(stderr, "error reading bytes: %d (%s)\r\n", errno, strerror(errno));
 		goto kys;
 	}
 
@@ -111,28 +113,28 @@ void* client_thread(void *vargp) {
 		bzero(buf, sizeof(buf));
 		strcpy(buf, "HTTP/1.1 405 METHOD NOT ALLOWED\r\n\r\n<h1>Error 405: Method not allowed.</h1>\r\n<p>This proxy only supports CONNECT requests.</p>\r\n");
 		int sent = send(client_sock, buf, strlen(buf), 0);
-		fprintf(stderr, "invalid request\r\n");
+		fprintf(stderr, "invalid request: %s\r\n", method);
 		goto kys;
 	}
 
-	printf("im totally connecting to: %s\r\n", host);
+//	printf("im totally connecting to: %s\r\n", host);
 
 	char *host_token = strtok(host, ":");
 	if (host_token == NULL) {
 		fprintf(stderr, "error reading host\r\n");
-		goto kys;
+		goto pre_hostname_kys;
 	}
 	char *hostname = host_token, *end_ptr;
 	strcpy(hostname, host_token);
 	host_token = strtok(NULL, ":");
 	if (host_token == NULL) {
 		fprintf(stderr, "error reading port\r\n");
-		goto kys;
+		goto post_hostname_kys;
 	}
 	int host_port = strtol(host_token, &end_ptr, 10);
 	if (end_ptr == host_token || *end_ptr || host_port < 0 || host_port > 65535) {
 		fprintf(stderr, "error parsing port\r\n");
-		goto kys;
+		goto post_hostname_kys;
 	}
 
 	struct addrinfo hints, *res, *result;
@@ -144,8 +146,8 @@ void* client_thread(void *vargp) {
 
 	int err_code = getaddrinfo(hostname, NULL, &hints, &result);
 	if (err_code < 0) {
-		fprintf(stderr, "error in getaddrinfo(): %d: %s\r\n", err_code, strerror(err_code));
-		goto kys;
+		fprintf(stderr, "(%s) error in getaddrinfo(): %d: %s\r\n", hostname, err_code, strerror(err_code));
+		goto post_hostname_kys;
 	}
 
 	res = result;
@@ -161,7 +163,7 @@ void* client_thread(void *vargp) {
 		inet_ntop(res->ai_family, res->ai_addr->sa_data, addrstr, BUF_SIZE);
 		ptr = &((struct sockaddr_in *) res->ai_addr)->sin_addr;
 		inet_ntop(res->ai_family, ptr, addrstr, BUF_SIZE);
-		printf("%s: %s\n", hostname, addrstr);
+//		printf("%s: %s\n", hostname, addrstr);
 
 		bzero(&host_addr, sizeof(host_addr));
 
@@ -171,23 +173,24 @@ void* client_thread(void *vargp) {
 
 		host_sock = socket(AF_INET, SOCK_STREAM, 0);
 		if (host_sock < 0) {
-			fprintf(stderr, "Error initializing server socket.\r\n");
+			fprintf(stderr, "(%s) Error initializing server socket.\r\n", hostname);
 			break;
 		}
 
 		err_code = connect(host_sock, (struct sockaddr*) &host_addr, sizeof(host_addr));
 		if (err_code < 0) {
-			fprintf(stderr, "error connecting: %d: %s\r\n", err_code, strerror(err_code));
+			fprintf(stderr, "(%s) error connecting: %d: %s\r\n", hostname, err_code, strerror(err_code));
 			res = res ->ai_next;
 			continue;
 		}
-		printf("connected!!🪤\r\n");
+		printf("(%s) connected!!🪤\r\n", hostname);
 
 		struct socks_t sock;
 		sock.client_sock_ptr = (int *) vargp;
 		sock.host_sock_ptr = &host_sock;
 		sock.tx_thread = tx_thread;
 		sock.rx_thread = rx_thread;
+		sock.hostname = hostname;
 
 		pthread_create(&tx_thread, NULL, client_tx_thread, (void*) &sock);
 		pthread_create(&rx_thread, NULL, client_rx_thread, (void*) &sock);
@@ -198,71 +201,96 @@ void* client_thread(void *vargp) {
 		break;
 	}
 
+	pthread_cancel(tx_thread);
+	pthread_cancel(rx_thread);
+	printf("(%s) should be killed.\r\n", hostname);
+	post_hostname_kys:
+		hostname = NULL;
+		free(hostname);
+	pre_hostname_kys:
+		host_token = NULL;
+		free(host_token);
 	kys:
 		printf("im killing myself\r\n");
 		freeaddrinfo(result);
 		res = NULL;
 		result = NULL;
-//		free(hostname);
-		hostname = NULL;
 		close(host_sock);
 		close(client_sock);
 		pthread_exit(NULL);
-		printf("im killing myself 2\r\n");
+		printf("this should not print vro\r\n");
+}
+
+void *wait_for_client_death(void *args) {
 }
 
 void *client_tx_thread(void *args) {
-	printf("in my connecting era 1.5\r\n");
 	struct socks_t *sock = args;
+	char *hostname = sock->hostname;
+	printf("(%s, host) in my connecting era\r\n", hostname);
 
 	int host_sock = *(sock->host_sock_ptr), client_sock = *(sock->client_sock_ptr);
 
 	pthread_t other_thread = sock->rx_thread;
 
 	long unsigned int len = 0, sent = 0;
-	char buf[BUF_SIZE];
+	char *buf = malloc(BUF_SIZE);
 	bzero(buf, sizeof(buf));
 	strcpy(buf, "HTTP/1.1 200 OK\r\n\r\n");
 	sent = send(client_sock, buf, strlen(buf), 0);
-	printf("in my connecting era 2\r\n");
+	printf("(%s, host) in my connecting era 2\r\n", hostname);
 	while (1) {
 		len = read(host_sock, buf, BUF_SIZE);
 		if (len < 1) {
-			printf("(host) recv: %d (%s)\r\n", errno, strerror(errno));
-			pthread_cancel(other_thread);
-			pthread_exit(NULL);
+			printf("(%s, host) recv: %d (%s)\r\n", hostname, errno, strerror(errno));
+//			pthread_cancel(other_thread);
+			goto tx_done;
 		}
 		sent = send(client_sock, buf, len, 0);
 		if (sent != len) {
-			pthread_cancel(other_thread);
-			pthread_exit(NULL);
+//			pthread_cancel(other_thread);
+			goto tx_done;
 		}
 	}
+	tx_done:
+		free(buf);
+		buf = NULL;
+		printf("(%s, host) should be killed.\r\n", hostname);
+		pthread_exit(NULL);
+		printf("(%s, host) should not print.\r\n", hostname);
+
 }
 
 void *client_rx_thread(void *args) {
-	printf("in my connecting era 1.5\r\n");
 	struct socks_t *sock = args;
+	char *hostname = sock->hostname;
+	printf("(%s, client) in my connecting era\r\n", hostname);
 
 	int host_sock = *(sock->host_sock_ptr), client_sock = *(sock->client_sock_ptr);
 
 	pthread_t other_thread = sock->tx_thread;
 
 	long unsigned int len = 0, sent = 0;
-	char buf[BUF_SIZE];
-	printf("in my connecting era 2\r\n");
+	char *buf = malloc(BUF_SIZE);
+	printf("(%s, client) in my connecting era 2\r\n", hostname);
 	while (1) {
 		len = read(client_sock, buf, BUF_SIZE);
 		if (len < 1) {
-			printf("(client) recv: %d (%s)\r\n", errno, strerror(errno));
-			pthread_cancel(other_thread);
-			pthread_exit(NULL);
+			printf("(%s, client) recv: %d (%s)\r\n", hostname, errno, strerror(errno));
+//			pthread_cancel(other_thread);
+			goto rx_done;
 		}
 		sent = send(host_sock, buf, len, 0);
 		if (sent != len) {
-			pthread_cancel(other_thread);
-			pthread_exit(NULL);
+//			pthread_cancel(other_thread);
+			goto rx_done;
 		}
 	}
+	rx_done:
+		free(buf);
+		buf = NULL;
+		printf("(%s, client) should be killed.\r\n", hostname);
+		pthread_exit(NULL);
+		printf("(%s, client) should not print.\r\n", hostname);
 }
 
