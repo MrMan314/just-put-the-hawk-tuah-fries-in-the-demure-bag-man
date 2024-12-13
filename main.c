@@ -24,7 +24,6 @@
 void *client_thread(void *vargp);
 void *client_tx_thread(void *vargp);
 void *client_rx_thread(void *vargp);
-void *wait_for_client_death(void *vargp);
 
 char *ip = "127.0.0.1";
 int port = 6500;
@@ -34,9 +33,8 @@ struct sockaddr_in server_addr, client_addr;
 struct socks_t {
 	int *client_sock_ptr;
 	int *host_sock_ptr;
-	pthread_t tx_thread;
-	pthread_t rx_thread;
 	char *hostname;
+	pthread_cond_t *death;
 };
 
 int main() {
@@ -83,7 +81,6 @@ int main() {
 			printf("%s\n", strerror(client_socket));
 			continue;
 		}
-//		printf("new spawn\r\n");
 		pthread_t thread;
 		pthread_create(&thread, NULL, client_thread, (void*) &client_socket);
 	}
@@ -98,7 +95,6 @@ void* client_thread(void *vargp) {
 	char method[BUF_SIZE], host[BUF_SIZE], buf[BUF_SIZE];
 
 	ioctl(client_sock, FIONREAD, &len);
-//	printf("to read: %lu\r\n", len);
 
 	bzero(buf, sizeof(buf));
 	int bytes_read = recv(client_sock, buf, sizeof(buf), 0);
@@ -110,14 +106,12 @@ void* client_thread(void *vargp) {
 
 	sscanf(buf, "%10s %259s", method, host);
 	if (strcasecmp(method, "CONNECT")) {
+		fprintf(stderr, "invalid request: %s\r\n", buf);
 		bzero(buf, sizeof(buf));
 		strcpy(buf, "HTTP/1.1 405 METHOD NOT ALLOWED\r\n\r\n<h1>Error 405: Method not allowed.</h1>\r\n<p>This proxy only supports CONNECT requests.</p>\r\n");
 		int sent = send(client_sock, buf, strlen(buf), 0);
-		fprintf(stderr, "invalid request: %s\r\n", method);
 		goto kys;
 	}
-
-//	printf("im totally connecting to: %s\r\n", host);
 
 	char *host_token = strtok(host, ":");
 	if (host_token == NULL) {
@@ -163,7 +157,6 @@ void* client_thread(void *vargp) {
 		inet_ntop(res->ai_family, res->ai_addr->sa_data, addrstr, BUF_SIZE);
 		ptr = &((struct sockaddr_in *) res->ai_addr)->sin_addr;
 		inet_ntop(res->ai_family, ptr, addrstr, BUF_SIZE);
-//		printf("%s: %s\n", hostname, addrstr);
 
 		bzero(&host_addr, sizeof(host_addr));
 
@@ -185,18 +178,21 @@ void* client_thread(void *vargp) {
 		}
 		printf("(%s) connected!!🪤\r\n", hostname);
 
+		pthread_cond_t death = PTHREAD_COND_INITIALIZER;
+		pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+
 		struct socks_t sock;
 		sock.client_sock_ptr = (int *) vargp;
 		sock.host_sock_ptr = &host_sock;
-		sock.tx_thread = tx_thread;
-		sock.rx_thread = rx_thread;
 		sock.hostname = hostname;
+		sock.death = &death;
 
 		pthread_create(&tx_thread, NULL, client_tx_thread, (void*) &sock);
 		pthread_create(&rx_thread, NULL, client_rx_thread, (void*) &sock);
 
-		pthread_join(tx_thread, NULL);
-		pthread_join(rx_thread, NULL);
+		pthread_mutex_lock(&lock);
+		pthread_cond_wait(&death, &lock);
+		pthread_mutex_unlock(&lock);
 
 		break;
 	}
@@ -221,17 +217,12 @@ void* client_thread(void *vargp) {
 		printf("this should not print vro\r\n");
 }
 
-void *wait_for_client_death(void *args) {
-}
-
 void *client_tx_thread(void *args) {
 	struct socks_t *sock = args;
 	char *hostname = sock->hostname;
 	printf("(%s, host) in my connecting era\r\n", hostname);
 
 	int host_sock = *(sock->host_sock_ptr), client_sock = *(sock->client_sock_ptr);
-
-	pthread_t other_thread = sock->rx_thread;
 
 	long unsigned int len = 0, sent = 0;
 	char *buf = malloc(BUF_SIZE);
@@ -243,12 +234,10 @@ void *client_tx_thread(void *args) {
 		len = read(host_sock, buf, BUF_SIZE);
 		if (len < 1) {
 			printf("(%s, host) recv: %d (%s)\r\n", hostname, errno, strerror(errno));
-//			pthread_cancel(other_thread);
 			goto tx_done;
 		}
 		sent = send(client_sock, buf, len, 0);
 		if (sent != len) {
-//			pthread_cancel(other_thread);
 			goto tx_done;
 		}
 	}
@@ -256,6 +245,7 @@ void *client_tx_thread(void *args) {
 		free(buf);
 		buf = NULL;
 		printf("(%s, host) should be killed.\r\n", hostname);
+		pthread_cond_signal(sock->death);
 		pthread_exit(NULL);
 		printf("(%s, host) should not print.\r\n", hostname);
 
@@ -268,8 +258,6 @@ void *client_rx_thread(void *args) {
 
 	int host_sock = *(sock->host_sock_ptr), client_sock = *(sock->client_sock_ptr);
 
-	pthread_t other_thread = sock->tx_thread;
-
 	long unsigned int len = 0, sent = 0;
 	char *buf = malloc(BUF_SIZE);
 	printf("(%s, client) in my connecting era 2\r\n", hostname);
@@ -277,12 +265,10 @@ void *client_rx_thread(void *args) {
 		len = read(client_sock, buf, BUF_SIZE);
 		if (len < 1) {
 			printf("(%s, client) recv: %d (%s)\r\n", hostname, errno, strerror(errno));
-//			pthread_cancel(other_thread);
 			goto rx_done;
 		}
 		sent = send(host_sock, buf, len, 0);
 		if (sent != len) {
-//			pthread_cancel(other_thread);
 			goto rx_done;
 		}
 	}
@@ -290,6 +276,7 @@ void *client_rx_thread(void *args) {
 		free(buf);
 		buf = NULL;
 		printf("(%s, client) should be killed.\r\n", hostname);
+		pthread_cond_signal(sock->death);
 		pthread_exit(NULL);
 		printf("(%s, client) should not print.\r\n", hostname);
 }
