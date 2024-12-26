@@ -2,7 +2,7 @@
 
 char *ip = "127.0.0.1";
 int port = 6500;
-int server_sock, result;
+int server_sock, new_socket, result;
 struct sockaddr_in server_addr, client_addr;
 
 int main() {
@@ -41,15 +41,20 @@ int main() {
 	listen(server_sock, 5);
 
 	while (1) {
-		int client_socket;
 		socklen_t client_socklen = sizeof(client_addr);
-		client_socket = accept(server_sock, (struct sockaddr*) &client_addr, &client_socklen);
-		if (client_socket < 0) {
-			printf("%s\n", strerror(client_socket));
+		new_socket = accept(server_sock, (struct sockaddr*) &client_addr, &client_socklen);
+		if (new_socket < 0) {
+			printf("error in accept(): %d (%s)\r\n", errno, strerror(errno));
 			continue;
 		}
 		pthread_t thread;
-		pthread_create(&thread, NULL, client_thread, (void*) &client_socket);
+		int *client_socket = malloc(sizeof(int));
+		*client_socket = new_socket;
+		if (pthread_create(&thread, NULL, client_thread, (void*) client_socket)) {
+			printf("error in pthread_create: %d (%s)\r\n", errno, strerror(errno));
+			free(client_socket);
+			client_socket = NULL;
+		}
 	}
 
 	close(server_sock);

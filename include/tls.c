@@ -1,5 +1,10 @@
 #include <tls.h>
 
+bool validate_tls_header(TLSRecordHeader header) {
+	uint16_t ver = htons(header.version);
+	return ver > 0x29f && ver < 0x304 && header.content_type > 0x13 && header.content_type < 0x18;
+}
+
 char *get_tls_content_type(uint8_t code) {
 	switch (code) {
 		case 0x14: return "Change Cipher Spec";

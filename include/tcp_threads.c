@@ -6,10 +6,7 @@
 void* client_thread(void *vargp) {
 	int client_sock = *((int *) vargp);
 
-	long unsigned int len = 0;
 	char method[BUF_SIZE], host[BUF_SIZE], buf[BUF_SIZE];
-
-	ioctl(client_sock, FIONREAD, &len);
 
 	bzero(buf, sizeof(buf));
 	int bytes_read = recv(client_sock, buf, sizeof(buf), 0);
@@ -153,7 +150,9 @@ void *client_tx_thread(void *args) {
 		}
 		if (len > 4) {
 			TLSRecordHeader *header = (TLSRecordHeader*) buf;
-			printf("(%s, host) %s %s; length: %d\r\n", hostname, get_tls_version(header->version), get_tls_content_type(header->content_type), htons(header->length));
+			if (validate_tls_header(*header)) {
+				printf("(%s, host) %s %s; length: %d\r\n", hostname, get_tls_version(header->version), get_tls_content_type(header->content_type), htons(header->length));
+			}
 			header = NULL;
 		}
 		sent = send(client_sock, buf, len, 0);
@@ -190,7 +189,9 @@ void *client_rx_thread(void *args) {
 		}
 		if (len > 4) {
 			TLSRecordHeader *header = (TLSRecordHeader*) buf;
-			printf("(%s, client) %s %s; length: %d\r\n", hostname, get_tls_version(header->version), get_tls_content_type(header->content_type), htons(header->length));
+			if (validate_tls_header(*header)) {
+				printf("(%s, client) %s %s; length: %d\r\n", hostname, get_tls_version(header->version), get_tls_content_type(header->content_type), htons(header->length));
+			}
 			header = NULL;
 		}
 		sent = send(host_sock, buf, len, 0);
