@@ -1,8 +1,6 @@
 #include <tcp_threads.h>
 #include <tls.h>
 
-#define BUF_SIZE 1024
-
 void* client_thread(void *vargp) {
 	int client_sock = *((int *) vargp);
 
@@ -50,26 +48,21 @@ void* client_thread(void *vargp) {
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = AI_PASSIVE;
 
-	int err_code = getaddrinfo(hostname, NULL, &hints, &result);
-	if (err_code < 0) {
-		fprintf(stderr, "(%s) error in getaddrinfo(): %d: %s\r\n", hostname, err_code, strerror(err_code));
+	int addrinfo = getaddrinfo(hostname, NULL, &hints, &result);
+
+	if (addrinfo < 0) {
+		fprintf(stderr, "(%s) error in getaddrinfo(): %d: (%s)\r\n", hostname, addrinfo, strerror(addrinfo));
 		goto post_hostname_kys;
 	}
 
 	res = result;
 
-	char addrstr[BUF_SIZE];
-	void *ptr;
 	pthread_t rx_thread, tx_thread;
 	struct sockaddr_in host_addr;
 	int host_sock;
 
 
 	while (res) {
-		inet_ntop(res->ai_family, res->ai_addr->sa_data, addrstr, BUF_SIZE);
-		ptr = &((struct sockaddr_in *) res->ai_addr)->sin_addr;
-		inet_ntop(res->ai_family, ptr, addrstr, BUF_SIZE);
-
 		bzero(&host_addr, sizeof(host_addr));
 
 		host_addr.sin_family = AF_INET;
@@ -78,17 +71,16 @@ void* client_thread(void *vargp) {
 
 		host_sock = socket(AF_INET, SOCK_STREAM, 0);
 		if (host_sock < 0) {
-			fprintf(stderr, "(%s) Error initializing server socket.\r\n", hostname);
+			fprintf(stderr, "(%s) Error initializing server socket: %d (%s)\r\n", hostname, errno, strerror(errno));
 			break;
 		}
 
-		err_code = connect(host_sock, (struct sockaddr*) &host_addr, sizeof(host_addr));
-		if (err_code < 0) {
-			fprintf(stderr, "(%s) error connecting: %d: %s\r\n", hostname, err_code, strerror(err_code));
-			res = res ->ai_next;
+		if (connect(host_sock, (struct sockaddr*) &host_addr, sizeof(host_addr)) < 0) {
+			fprintf(stderr, "(%s) error connecting: %d: %s\r\n", hostname, errno, strerror(errno));
+			res = res->ai_next;
 			continue;
 		}
-		printf("(%s) connected!!🪤\r\n", hostname);
+		printf("(%s) connected\r\n", hostname);
 
 		pthread_cond_t death = PTHREAD_COND_INITIALIZER;
 		pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -119,20 +111,17 @@ void* client_thread(void *vargp) {
 		host_token = NULL;
 		free(host_token);
 	kys:
-		printf("im killing myself\r\n");
 		freeaddrinfo(result);
 		res = NULL;
 		result = NULL;
 		close(host_sock);
 		close(client_sock);
 		pthread_exit(NULL);
-		printf("this should not print vro\r\n");
 }
 
 void *client_tx_thread(void *args) {
 	struct socks_t *sock = args;
 	char *hostname = sock->hostname;
-	printf("(%s, host) in my connecting era\r\n", hostname);
 
 	int host_sock = *(sock->host_sock_ptr), client_sock = *(sock->client_sock_ptr);
 
@@ -141,11 +130,10 @@ void *client_tx_thread(void *args) {
 	bzero(buf, sizeof(buf));
 	strcpy(buf, "HTTP/1.1 200 OK\r\n\r\n");
 	sent = send(client_sock, buf, strlen(buf), 0);
-	printf("(%s, host) in my connecting era 2\r\n", hostname);
 	while (1) {
 		len = read(host_sock, buf, BUF_SIZE);
 		if (len < 1) {
-			printf("(%s, host) recv: %d (%s)\r\n", hostname, errno, strerror(errno));
+			printf("(%s, host) error in recv(): %d (%s)\r\n", hostname, errno, strerror(errno));
 			goto tx_done;
 		}
 		if (len > 4) {
@@ -166,7 +154,6 @@ void *client_tx_thread(void *args) {
 		printf("(%s, host) should be killed.\r\n", hostname);
 		pthread_cond_signal(sock->death);
 		pthread_exit(NULL);
-		printf("(%s, host) should not print.\r\n", hostname);
 
 }
 
@@ -174,17 +161,15 @@ void *client_rx_thread(void *args) {
 	struct socks_t *sock = args;
 	char *hostname = sock->hostname;
 	char sni_found = 0;
-	printf("(%s, client) in my connecting era\r\n", hostname);
 
 	int host_sock = *(sock->host_sock_ptr), client_sock = *(sock->client_sock_ptr);
 
 	long unsigned int len = 0, sent = 0;
 	char *buf = malloc(BUF_SIZE);
-	printf("(%s, client) in my connecting era 2\r\n", hostname);
 	while (1) {
 		len = read(client_sock, buf, BUF_SIZE);
 		if (len < 1) {
-			printf("(%s, client) recv: %d (%s)\r\n", hostname, errno, strerror(errno));
+			printf("(%s, client) error in recv(): %d (%s)\r\n", hostname, errno, strerror(errno));
 			goto rx_done;
 		}
 		if (len > 4) {
@@ -205,5 +190,4 @@ void *client_rx_thread(void *args) {
 		printf("(%s, client) should be killed.\r\n", hostname);
 		pthread_cond_signal(sock->death);
 		pthread_exit(NULL);
-		printf("(%s, client) should not print.\r\n", hostname);
 }
