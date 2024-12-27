@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #ifdef _WIN32
 	#include <winsock2.h>
 	#include <ws2tcpip.h>
@@ -23,14 +24,13 @@
 #define BUF_SIZE 1500
 
 void *client_thread(void *vargp);
-void *client_tx_thread(void *vargp);
-void *client_rx_thread(void *vargp);
 
 struct socks_t {
 	int *client_sock_ptr;
 	int *host_sock_ptr;
 	char *hostname;
 	pthread_cond_t *death;
+	bool is_host;
 };
 
 #endif

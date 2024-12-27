@@ -1,6 +1,8 @@
 #include <tcp_threads.h>
 #include <tls.h>
 
+void *client_data_thread(void *vargp);
+
 void* client_thread(void *vargp) {
 	int client_sock = *((int *) vargp);
 
@@ -85,18 +87,26 @@ void* client_thread(void *vargp) {
 		pthread_cond_t death = PTHREAD_COND_INITIALIZER;
 		pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
-		struct socks_t sock;
-		sock.client_sock_ptr = (int *) vargp;
-		sock.host_sock_ptr = &host_sock;
-		sock.hostname = hostname;
-		sock.death = &death;
+		struct socks_t *rx_sock = malloc(sizeof(struct socks_t)), *tx_sock = malloc(sizeof(struct socks_t));
+		rx_sock->client_sock_ptr = (int *) vargp;
+		rx_sock->host_sock_ptr = &host_sock;
+		rx_sock->hostname = hostname;
+		rx_sock->death = &death;
+		memcpy(tx_sock, rx_sock, sizeof(struct socks_t));
+		rx_sock->is_host = 0;
+		tx_sock->is_host = 1;
 
-		pthread_create(&tx_thread, NULL, client_tx_thread, (void*) &sock);
-		pthread_create(&rx_thread, NULL, client_rx_thread, (void*) &sock);
+		pthread_create(&tx_thread, NULL, client_data_thread, (void*) tx_sock);
+		pthread_create(&rx_thread, NULL, client_data_thread, (void*) rx_sock);
 
 		pthread_mutex_lock(&lock);
 		pthread_cond_wait(&death, &lock);
 		pthread_mutex_unlock(&lock);
+
+		free(rx_sock);
+		rx_sock = NULL;
+		free(tx_sock);
+		tx_sock = NULL;
 
 		break;
 	}
@@ -119,75 +129,51 @@ void* client_thread(void *vargp) {
 		pthread_exit(NULL);
 }
 
-void *client_tx_thread(void *args) {
+void *client_data_thread(void *args) {
 	struct socks_t *sock = args;
 	char *hostname = sock->hostname;
+	int rx_sock, tx_sock;
 
-	int host_sock = *(sock->host_sock_ptr), client_sock = *(sock->client_sock_ptr);
+	if (sock->is_host) {
+		rx_sock = *(sock->host_sock_ptr), tx_sock = *(sock->client_sock_ptr);
+	} else {
+		tx_sock = *(sock->host_sock_ptr), rx_sock = *(sock->client_sock_ptr);
+	}
 
 	long unsigned int len = 0, sent = 0;
 	char *buf = malloc(BUF_SIZE);
-	bzero(buf, sizeof(buf));
-	strcpy(buf, "HTTP/1.1 200 OK\r\n\r\n");
-	sent = send(client_sock, buf, strlen(buf), 0);
+
+	if (sock->is_host) {
+		bzero(buf, sizeof(buf));
+		strcpy(buf, "HTTP/1.1 200 OK\r\n\r\n");
+		sent = send(tx_sock, buf, strlen(buf), 0);
+	}
+
+	char *thread_name = sock->is_host ? "host" : "client";
+
 	while (1) {
-		len = read(host_sock, buf, BUF_SIZE);
+		len = read(rx_sock, buf, BUF_SIZE);
 		if (len < 1) {
-			printf("(%s, host) error in recv(): %d (%s)\r\n", hostname, errno, strerror(errno));
-			goto tx_done;
+			printf("(%s, %s) error in recv(): %d (%s)\r\n", hostname, thread_name, errno, strerror(errno));
+			goto done;
 		}
 		if (len > 4) {
 			TLSRecordHeader *header = (TLSRecordHeader*) buf;
 			if (validate_tls_header(*header)) {
-				printf("(%s, host) %s %s; length: %d\r\n", hostname, get_tls_version(header->version), get_tls_content_type(header->content_type), htons(header->length));
+				printf("(%s, %s) %s %s; length: %d\r\n", hostname, thread_name, get_tls_version(header->version), get_tls_content_type(header->content_type), htons(header->length));
 			}
 			header = NULL;
 		}
-		sent = send(client_sock, buf, len, 0);
+		sent = send(tx_sock, buf, len, 0);
 		if (sent != len) {
-			goto tx_done;
+			goto done;
 		}
 	}
-	tx_done:
+	done:
 		free(buf);
 		buf = NULL;
-		printf("(%s, host) should be killed.\r\n", hostname);
+		printf("(%s, %s) should be killed.\r\n", hostname, thread_name);
 		pthread_cond_signal(sock->death);
 		pthread_exit(NULL);
 
-}
-
-void *client_rx_thread(void *args) {
-	struct socks_t *sock = args;
-	char *hostname = sock->hostname;
-	char sni_found = 0;
-
-	int host_sock = *(sock->host_sock_ptr), client_sock = *(sock->client_sock_ptr);
-
-	long unsigned int len = 0, sent = 0;
-	char *buf = malloc(BUF_SIZE);
-	while (1) {
-		len = read(client_sock, buf, BUF_SIZE);
-		if (len < 1) {
-			printf("(%s, client) error in recv(): %d (%s)\r\n", hostname, errno, strerror(errno));
-			goto rx_done;
-		}
-		if (len > 4) {
-			TLSRecordHeader *header = (TLSRecordHeader*) buf;
-			if (validate_tls_header(*header)) {
-				printf("(%s, client) %s %s; length: %d\r\n", hostname, get_tls_version(header->version), get_tls_content_type(header->content_type), htons(header->length));
-			}
-			header = NULL;
-		}
-		sent = send(host_sock, buf, len, 0);
-		if (sent != len) {
-			goto rx_done;
-		}
-	}
-	rx_done:
-		free(buf);
-		buf = NULL;
-		printf("(%s, client) should be killed.\r\n", hostname);
-		pthread_cond_signal(sock->death);
-		pthread_exit(NULL);
 }
