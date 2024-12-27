@@ -9,10 +9,9 @@ void* client_thread(void *vargp) {
 	char method[BUF_SIZE], host[BUF_SIZE], buf[BUF_SIZE];
 
 	bzero(buf, sizeof(buf));
-	int bytes_read = recv(client_sock, buf, sizeof(buf), 0);
 
-	if (bytes_read < 0) {
-		fprintf(stderr, "error reading bytes: %d (%s)\r\n", errno, strerror(errno));
+	if (recv(client_sock, buf, sizeof(buf), 0) < 0) {
+		fprintf(stderr, "error in recv(): %d (%s)\r\n", errno, strerror(errno));
 		goto kys;
 	}
 
@@ -34,12 +33,12 @@ void* client_thread(void *vargp) {
 	strcpy(hostname, host_token);
 	host_token = strtok(NULL, ":");
 	if (host_token == NULL) {
-		fprintf(stderr, "error reading port\r\n");
+		fprintf(stderr, "(%s) error reading port\r\n", hostname);
 		goto post_hostname_kys;
 	}
 	int host_port = strtol(host_token, &end_ptr, 10);
 	if (end_ptr == host_token || *end_ptr || host_port < 0 || host_port > 65535) {
-		fprintf(stderr, "error parsing port\r\n");
+		fprintf(stderr, "(%s) error parsing port\r\n", hostname);
 		goto post_hostname_kys;
 	}
 
