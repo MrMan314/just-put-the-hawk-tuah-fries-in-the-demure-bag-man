@@ -17,7 +17,6 @@ void* client_thread(void *vargp) {
 
 	sscanf(buf, "%10s %259s", method, host);
 	if (strcasecmp(method, "CONNECT")) {
-		fprintf(stderr, "invalid request: %s\r\n", buf);
 		bzero(buf, sizeof(buf));
 		strcpy(buf, "HTTP/1.1 405 METHOD NOT ALLOWED\r\n\r\n<h1>Error 405: Method not allowed.</h1>\r\n<p>This proxy only supports CONNECT requests.</p>\r\n");
 		int sent = send(client_sock, buf, strlen(buf), 0);
@@ -153,13 +152,34 @@ void *client_data_thread(void *args) {
 	while (1) {
 		len = read(rx_sock, buf, BUF_SIZE);
 		if (len < 1) {
-			printf("(%s, %s) error in recv(): %d (%s)\r\n", hostname, thread_name, errno, strerror(errno));
 			goto done;
 		}
-		if (len > 4) {
+		if (!sock->is_host && len > 4) {
 			TLSRecordHeader *header = (TLSRecordHeader*) buf;
-			if (validate_tls_header(*header)) {
+			if (header->content_type == TLS_HANDSHAKE && validate_tls_header(*header)) {
 				printf("(%s, %s) %s %s; length: %d\r\n", hostname, thread_name, get_tls_version(header->version), get_tls_content_type(header->content_type), htons(header->length));
+				TLSHandshakeRecordHeader *hello_header = (TLSHandshakeRecordHeader*) (buf + sizeof(TLSRecordHeader));
+				if (hello_header->handshake_type == TLS_HANDSHAKE_CLIENT_HELLO) {
+					printf("\thandshake len: %d, ver: %s\r\n", (hello_header->length[0] << 16) + (hello_header->length[1] << 8) + hello_header->length[2], get_tls_version(hello_header->version));
+					uint16_t cipher_suites_len = htons(*(uint16_t *)(buf + sizeof(TLSRecordHeader) + sizeof(TLSHandshakeRecordHeader) + hello_header->session_id_length));
+					printf("\tcipher suites len: %d\r\n", cipher_suites_len);
+					uint8_t compression_methods_len = *(uint16_t *)(buf + sizeof(TLSRecordHeader) + sizeof(TLSHandshakeRecordHeader) + hello_header->session_id_length + cipher_suites_len + 2);
+					printf("\tcompression methods len: %x\r\n", compression_methods_len);
+					uint16_t extensions_len = htons(*(uint16_t *)(buf + sizeof(TLSRecordHeader) + sizeof(TLSHandshakeRecordHeader) + hello_header->session_id_length + cipher_suites_len + compression_methods_len + 3));
+					printf("\textensions len: %d\r\n", extensions_len);
+					size_t offset = sizeof(TLSRecordHeader) + sizeof(TLSHandshakeRecordHeader) + hello_header->session_id_length + cipher_suites_len + compression_methods_len + 5;
+					while (offset < len && extensions_len) {
+						TLSHandshakeExtensionRecordHeader *test_value = (TLSHandshakeExtensionRecordHeader *) (buf + offset);
+						printf("\t\textension: type %x, len: %d\r\n", htons(test_value->type), htons(test_value->length));
+						if (!test_value->type) {
+							char *name = (char *) (buf + offset + sizeof(TLSHandshakeExtensionRecordHeader) + 5);
+							printf("\t\t\tname: %.*s\r\n", htons(test_value->length) - 5, name);
+						}
+						offset += sizeof(TLSHandshakeExtensionRecordHeader) + htons(test_value->length);
+					}
+
+				}
+				hello_header = NULL;
 			}
 			header = NULL;
 		}

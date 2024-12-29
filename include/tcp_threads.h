@@ -21,7 +21,7 @@
 #ifndef TCP_THREADS_H
 #define TCP_THREADS_H
 
-#define BUF_SIZE 1500
+#define BUF_SIZE 65535
 
 void *client_thread(void *vargp);
 
