@@ -6,7 +6,7 @@ void *client_data_thread(void *vargp);
 void* client_thread(void *vargp) {
 	int client_sock = *((int *) vargp);
 
-	char *method = malloc(BUF_SIZE), *host = malloc(BUF_SIZE), *buf = malloc(BUF_SIZE);
+	char *method = malloc(BUF_SIZE), *host = malloc(BUF_SIZE), *buf = malloc(BUF_SIZE), *saveptr = NULL;
 
 	bzero(buf, BUF_SIZE);
 
@@ -23,13 +23,13 @@ void* client_thread(void *vargp) {
 		goto kys;
 	}
 
-	char *host_token = strtok(host, ":");
+	char *host_token = strtok_r(host, ":", &saveptr);
 	if (host_token == NULL) {
 		fprintf(stderr, "error reading host\r\n");
 		goto kys;
 	}
 	char *hostname = host_token, *end_ptr;
-	host_token = strtok(NULL, ":");
+	host_token = strtok_r(NULL, ":", &saveptr);
 	if (host_token == NULL) {
 		fprintf(stderr, "(%s) error reading port\r\n", hostname);
 		goto kys;
@@ -126,6 +126,7 @@ void* client_thread(void *vargp) {
 		buf = NULL;
 		method = NULL;
 		host = NULL;
+		saveptr = NULL;
 		close(host_sock);
 		close(client_sock);
 		pthread_exit(NULL);
