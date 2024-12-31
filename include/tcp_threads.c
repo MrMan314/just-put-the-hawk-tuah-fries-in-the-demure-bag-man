@@ -6,18 +6,18 @@ void *client_data_thread(void *vargp);
 void* client_thread(void *vargp) {
 	int client_sock = *((int *) vargp);
 
-	char method[BUF_SIZE], host[BUF_SIZE], buf[BUF_SIZE];
+	char *method = malloc(BUF_SIZE), *host = malloc(BUF_SIZE), *buf = malloc(BUF_SIZE);
 
-	bzero(buf, sizeof(buf));
+	bzero(buf, BUF_SIZE);
 
-	if (recv(client_sock, buf, sizeof(buf), 0) < 0) {
+	if (recv(client_sock, buf, BUF_SIZE, 0) < 0) {
 		fprintf(stderr, "error in recv(): %d (%s)\r\n", errno, strerror(errno));
 		goto kys;
 	}
 
 	sscanf(buf, "%10s %259s", method, host);
 	if (strcasecmp(method, "CONNECT")) {
-		bzero(buf, sizeof(buf));
+		bzero(buf, BUF_SIZE);
 		strcpy(buf, "HTTP/1.1 405 METHOD NOT ALLOWED\r\n\r\n<h1>Error 405: Method not allowed.</h1>\r\n<p>This proxy only supports CONNECT requests.</p>\r\n");
 		int sent = send(client_sock, buf, strlen(buf), 0);
 		goto kys;
@@ -90,6 +90,7 @@ void* client_thread(void *vargp) {
 		rx_sock->host_sock_ptr = &host_sock;
 		rx_sock->hostname = hostname;
 		rx_sock->death = &death;
+		rx_sock->header = buf;
 		memcpy(tx_sock, rx_sock, sizeof(struct socks_t));
 		rx_sock->is_host = 0;
 		tx_sock->is_host = 1;
@@ -101,6 +102,9 @@ void* client_thread(void *vargp) {
 		pthread_cond_wait(&death, &lock);
 		pthread_mutex_unlock(&lock);
 
+		pthread_cancel(tx_thread);
+		pthread_cancel(rx_thread);
+
 		free(rx_sock);
 		rx_sock = NULL;
 		free(tx_sock);
@@ -109,8 +113,10 @@ void* client_thread(void *vargp) {
 		break;
 	}
 
-	pthread_cancel(tx_thread);
-	pthread_cancel(rx_thread);
+	freeaddrinfo(result);
+	res = NULL;
+	result = NULL;
+
 	printf("(%s) should be killed.\r\n", hostname);
 	post_hostname_kys:
 		hostname = NULL;
@@ -119,9 +125,8 @@ void* client_thread(void *vargp) {
 		host_token = NULL;
 		free(host_token);
 	kys:
-		freeaddrinfo(result);
-		res = NULL;
-		result = NULL;
+		free(buf);
+		buf = NULL;
 		close(host_sock);
 		close(client_sock);
 		pthread_exit(NULL);
@@ -177,7 +182,6 @@ void *client_data_thread(void *args) {
 						}
 						offset += sizeof(TLSHandshakeExtensionRecordHeader) + htons(test_value->length);
 					}
-
 				}
 				hello_header = NULL;
 			}

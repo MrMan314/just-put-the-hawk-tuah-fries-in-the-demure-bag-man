@@ -31,6 +31,7 @@ struct socks_t {
 	char *hostname;
 	pthread_cond_t *death;
 	bool is_host;
+	char *header;
 };
 
 #endif
