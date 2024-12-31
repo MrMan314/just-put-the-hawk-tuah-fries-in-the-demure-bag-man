@@ -26,19 +26,18 @@ void* client_thread(void *vargp) {
 	char *host_token = strtok(host, ":");
 	if (host_token == NULL) {
 		fprintf(stderr, "error reading host\r\n");
-		goto pre_hostname_kys;
+		goto kys;
 	}
 	char *hostname = host_token, *end_ptr;
-	strcpy(hostname, host_token);
 	host_token = strtok(NULL, ":");
 	if (host_token == NULL) {
 		fprintf(stderr, "(%s) error reading port\r\n", hostname);
-		goto post_hostname_kys;
+		goto kys;
 	}
 	int host_port = strtol(host_token, &end_ptr, 10);
 	if (end_ptr == host_token || *end_ptr || host_port < 0 || host_port > 65535) {
 		fprintf(stderr, "(%s) error parsing port\r\n", hostname);
-		goto post_hostname_kys;
+		goto kys;
 	}
 
 	struct addrinfo hints, *res, *result;
@@ -52,7 +51,7 @@ void* client_thread(void *vargp) {
 
 	if (addrinfo < 0) {
 		fprintf(stderr, "(%s) error in getaddrinfo(): %d: (%s)\r\n", hostname, addrinfo, strerror(addrinfo));
-		goto post_hostname_kys;
+		goto kys;
 	}
 
 	res = result;
@@ -118,16 +117,12 @@ void* client_thread(void *vargp) {
 	result = NULL;
 
 	printf("(%s) should be killed.\r\n", hostname);
-	post_hostname_kys:
-		free(hostname);
-		hostname = NULL;
-	pre_hostname_kys:
-		free(host_token);
-		host_token = NULL;
 	kys:
 		free(buf);
 		free(method);
 		free(host);
+		hostname = NULL;
+		host_token = NULL;
 		buf = NULL;
 		method = NULL;
 		host = NULL;
