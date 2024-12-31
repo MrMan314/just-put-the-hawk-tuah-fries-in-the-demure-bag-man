@@ -129,6 +129,8 @@ void* client_thread(void *vargp) {
 		free(method);
 		free(host);
 		buf = NULL;
+		method = NULL;
+		host = NULL;
 		close(host_sock);
 		close(client_sock);
 		pthread_exit(NULL);
