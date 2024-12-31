@@ -126,6 +126,8 @@ void* client_thread(void *vargp) {
 		free(host_token);
 	kys:
 		free(buf);
+		free(method);
+		free(host);
 		buf = NULL;
 		close(host_sock);
 		close(client_sock);
