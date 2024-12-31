@@ -119,11 +119,11 @@ void* client_thread(void *vargp) {
 
 	printf("(%s) should be killed.\r\n", hostname);
 	post_hostname_kys:
-		hostname = NULL;
 		free(hostname);
+		hostname = NULL;
 	pre_hostname_kys:
-		host_token = NULL;
 		free(host_token);
+		host_token = NULL;
 	kys:
 		free(buf);
 		free(method);
