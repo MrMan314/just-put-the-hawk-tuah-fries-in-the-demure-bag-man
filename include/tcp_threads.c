@@ -2,6 +2,7 @@
 #include <tls.h>
 
 void *client_data_thread(void *vargp);
+void *proxy_connection(void *vargp);
 
 void* client_thread(void *vargp) {
 	int client_sock = *((int *) vargp);
@@ -135,7 +136,10 @@ void* client_thread(void *vargp) {
 void *client_data_thread(void *args) {
 	struct socks_t *sock = args;
 	char *hostname = sock->hostname;
-	int rx_sock, tx_sock;
+	struct proxy_socks_t* proxy_socks;
+	int rx_sock, tx_sock, proxy_sock;
+	pthread_t proxy_thread;
+	bool proxy_active = 0;
 
 	if (sock->is_host) {
 		rx_sock = *(sock->host_sock_ptr), tx_sock = *(sock->client_sock_ptr);
@@ -152,10 +156,17 @@ void *client_data_thread(void *args) {
 		sent = send(tx_sock, buf, strlen(buf), 0);
 	}
 
-	char *thread_name = sock->is_host ? "host" : "client";
+	char *thread_name = sock->is_host ? "host" : "client", *name;
 
 	while (1) {
 		len = read(rx_sock, buf, BUF_SIZE);
+		if (proxy_active) {
+			printf("(%s, %s) killing proxy_thread\r\n", hostname, thread_name);
+			pthread_cancel(proxy_thread);
+			close(proxy_sock);
+			free(proxy_socks);
+			proxy_active = 0;
+		}
 		if (len < 1) {
 			goto done;
 		}
@@ -165,6 +176,7 @@ void *client_data_thread(void *args) {
 				printf("(%s, %s) %s %s; length: %d\r\n", hostname, thread_name, get_tls_version(header->version), get_tls_content_type(header->content_type), htons(header->length));
 				TLSHandshakeRecordHeader *hello_header = (TLSHandshakeRecordHeader*) (buf + sizeof(TLSRecordHeader));
 				if (hello_header->handshake_type == TLS_HANDSHAKE_CLIENT_HELLO) {
+					TLSHandshakeExtensionRecordHeader *extension_header;
 					printf("\thandshake len: %d, ver: %s\r\n", (hello_header->length[0] << 16) + (hello_header->length[1] << 8) + hello_header->length[2], get_tls_version(hello_header->version));
 					uint16_t cipher_suites_len = htons(*(uint16_t *)(buf + sizeof(TLSRecordHeader) + sizeof(TLSHandshakeRecordHeader) + hello_header->session_id_length));
 					printf("\tcipher suites len: %d\r\n", cipher_suites_len);
@@ -174,19 +186,74 @@ void *client_data_thread(void *args) {
 					printf("\textensions len: %d\r\n", extensions_len);
 					size_t offset = sizeof(TLSRecordHeader) + sizeof(TLSHandshakeRecordHeader) + hello_header->session_id_length + cipher_suites_len + compression_methods_len + 5;
 					while (offset < len && extensions_len) {
-						TLSHandshakeExtensionRecordHeader *test_value = (TLSHandshakeExtensionRecordHeader *) (buf + offset);
-						printf("\t\textension: type %x, len: %d\r\n", htons(test_value->type), htons(test_value->length));
-						if (!test_value->type) {
-							char *name = (char *) (buf + offset + sizeof(TLSHandshakeExtensionRecordHeader) + 5);
-							printf("\t\t\tname: %.*s\r\n", htons(test_value->length) - 5, name);
+						extension_header = (TLSHandshakeExtensionRecordHeader *) (buf + offset);
+						printf("\t\textension: type %x, len: %d\r\n", htons(extension_header->type), htons(extension_header->length));
+						if (!extension_header->type) {
+							name = (char *) (buf + offset + sizeof(TLSHandshakeExtensionRecordHeader) + 5);
+							printf("\t\t\tname: %.*s\r\n", htons(extension_header->length) - 5, name);
+							break;
 						}
-						offset += sizeof(TLSHandshakeExtensionRecordHeader) + htons(test_value->length);
+						offset += sizeof(TLSHandshakeExtensionRecordHeader) + htons(extension_header->length);
 					}
+
+					hello_header = NULL;
+					header = NULL;
+					name = NULL;
+					extension_header = NULL;
+
+					proxy_sock = socket(AF_INET, SOCK_STREAM, 0);
+					struct sockaddr_in proxy_addr;
+
+					bzero(&proxy_addr, sizeof(proxy_addr));
+
+					proxy_addr.sin_family = AF_INET;
+					proxy_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+					proxy_addr.sin_port = htons(18080);
+
+					if (proxy_sock < 0) {
+						goto proxy_failure;
+					}
+
+					if (connect(proxy_sock, (struct sockaddr*) &proxy_addr, sizeof(proxy_addr)) < 0) {
+						goto proxy_failure;
+					}
+
+					printf("(%s, %s) proxy connected\r\n", hostname, thread_name);
+
+					if (send(proxy_sock, sock->header, strlen(sock->header), 0) != strlen(sock->header)) {
+						goto proxy_failure;
+					}
+
+					char *recv_header = malloc(BUF_SIZE);
+
+					read(proxy_sock, recv_header, BUF_SIZE);
+					free(recv_header);
+					recv_header = NULL;
+
+					if (send(proxy_sock, buf, len, 0) != len) {
+						goto proxy_failure;
+					}
+
+					proxy_socks = malloc(sizeof(struct proxy_socks_t));
+
+					proxy_socks->proxy_sock_ptr = &proxy_sock;
+					proxy_socks->rx_sock_ptr = &rx_sock;
+
+					pthread_create(&proxy_thread, NULL, proxy_connection, (void *) proxy_socks);
+					proxy_active = 1;
+
+//					test_value->type = 0xFFFF;
+//					test_value = NULL;
+
+					continue;
+//					goto cont;
+
+					proxy_failure:
+					printf("(%s, %s) proxy failure\r\n", hostname, thread_name);
 				}
-				hello_header = NULL;
 			}
-			header = NULL;
 		}
+		cont:
 		sent = send(tx_sock, buf, len, 0);
 		if (sent != len) {
 			goto done;
@@ -197,6 +264,30 @@ void *client_data_thread(void *args) {
 		buf = NULL;
 		printf("(%s, %s) should be killed.\r\n", hostname, thread_name);
 		pthread_cond_signal(sock->death);
+		pthread_exit(NULL);
+
+}
+
+void *proxy_connection(void *args) {
+	struct proxy_socks_t *sock = args;
+	char *buf = malloc(BUF_SIZE);
+	int len, proxy_sock = *(sock->proxy_sock_ptr), rx_sock = *(sock->rx_sock_ptr);
+
+	while (1) {
+		len = read(proxy_sock, buf, BUF_SIZE);
+
+		if (len < 0) {
+			goto done;
+		}
+
+		if (send(rx_sock, buf, len, 0) != len) {
+			goto done;
+		}
+	}
+
+	done:
+		free(buf);
+		buf = NULL;
 		pthread_exit(NULL);
 
 }

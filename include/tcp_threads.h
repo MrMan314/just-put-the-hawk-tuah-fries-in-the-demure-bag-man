@@ -34,4 +34,9 @@ struct socks_t {
 	char *header;
 };
 
+struct proxy_socks_t {
+	int *proxy_sock_ptr;
+	int *rx_sock_ptr;
+};
+
 #endif
